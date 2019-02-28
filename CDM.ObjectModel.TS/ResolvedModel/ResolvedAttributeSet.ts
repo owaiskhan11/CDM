@@ -1,5 +1,8 @@
 import {
     applierContext,
+    AttributeContextImpl,
+    AttributeContextParameters,
+    ICdmAttributeContext,
     ICdmAttributeDef,
     ParameterValue,
     ParameterValueSet,
@@ -18,7 +21,10 @@ import {
 export class ResolvedAttributeSet extends refCounted {
     public resolvedName2resolvedAttribute: Map<string, ResolvedAttribute>;
     public baseTrait2Attributes: Map<string, Set<ResolvedAttribute>>;
+    public ra2attCtxSet: Map<ResolvedAttribute, Set<ICdmAttributeContext>>;
+    public attCtx2ra: Map<ICdmAttributeContext, ResolvedAttribute>;
     public set: ResolvedAttribute[];
+    public attributeContext: ICdmAttributeContext;
     public insertOrder: number;
 
     constructor() {
@@ -26,11 +32,41 @@ export class ResolvedAttributeSet extends refCounted {
         // let bodyCode = () =>
         {
             this.resolvedName2resolvedAttribute = new Map<string, ResolvedAttribute>();
+            this.ra2attCtxSet = new Map<ResolvedAttribute, Set<ICdmAttributeContext>>();
+            this.attCtx2ra = new Map<ICdmAttributeContext, ResolvedAttribute>();
             this.set = [];
         }
         // return p.measure(bodyCode);
     }
-    public merge(toMerge: ResolvedAttribute): ResolvedAttributeSet {
+
+    public setAttributeContext(under: ICdmAttributeContext): void {
+        this.attributeContext = under;
+    }
+
+    public createAttributeContext(resOpt: resolveOptions, acp: AttributeContextParameters): ICdmAttributeContext {
+        // let bodyCode = () =>
+        {
+            if (!acp) {
+                return undefined;
+            }
+            // store the current context
+            this.attributeContext = AttributeContextImpl.createChildUnder(resOpt, acp);
+
+            return this.attributeContext;
+        }
+        // return p.measure(bodyCode);
+    }
+
+    public cacheAttributeContext(attCtx: ICdmAttributeContext, ra: ResolvedAttribute): void {
+        this.attCtx2ra.set(attCtx, ra);
+        // set collection will take care of adding context to set
+        if (!this.ra2attCtxSet.has(ra)) {
+            this.ra2attCtxSet.set(ra, new Set<ICdmAttributeContext>());
+        }
+        this.ra2attCtxSet.get(ra).add(attCtx);
+    }
+
+    public merge(toMerge: ResolvedAttribute, attCtx?: AttributeContextImpl): ResolvedAttributeSet {
         // let bodyCode = () =>
         {
             let rasResult: ResolvedAttributeSet;
@@ -53,7 +89,14 @@ export class ResolvedAttributeSet extends refCounted {
                     if (this.refCnt > 1) {
                         rasResult = this.copy();
                     } // copy on write
-                    (rasResult === undefined ? this : rasResult).resolvedName2resolvedAttribute.set(toMerge.resolvedName, toMerge);
+                    if (!rasResult) {
+                        rasResult = this;
+                    }
+                    rasResult.resolvedName2resolvedAttribute.set(toMerge.resolvedName, toMerge);
+                    // don't use the attCtx on the actual attribute, that's only for doing appliers
+                    if (attCtx) {
+                        rasResult.cacheAttributeContext(attCtx, toMerge);
+                    }
                     // toMerge.insertOrder = rasResult.set.length;
                     (rasResult === undefined ? this : rasResult).set.push(toMerge);
                 }
@@ -64,6 +107,27 @@ export class ResolvedAttributeSet extends refCounted {
         }
         // return p.measure(bodyCode);
     }
+
+    public copyAttCtxMappingsInto(ra2attCtxSet: Map<ResolvedAttribute, Set<ICdmAttributeContext>>,
+                                  attCtx2ra: Map<ICdmAttributeContext, ResolvedAttribute>,
+                                  sourceRa: ResolvedAttribute, newRa?: ResolvedAttribute): void {
+        if (this.ra2attCtxSet.size > 0) {
+            if (!newRa) {
+                newRa = sourceRa;
+            }
+            // get the set of attribute contexts for the old resolved attribute
+            const attCtxSet: Set<ICdmAttributeContext> = this.ra2attCtxSet.get(sourceRa);
+            if (attCtxSet) {
+                // map the new resolved attribute to the old context set
+                ra2attCtxSet.set(newRa, attCtxSet);
+                // map the old contexts to the new resolved attribute
+                for (const attCtx of attCtxSet.values()) {
+                    attCtx2ra.set(attCtx, newRa);
+                }
+            }
+        }
+    }
+
     public mergeSet(toMerge: ResolvedAttributeSet): ResolvedAttributeSet {
         // let bodyCode = () =>
         {
@@ -71,10 +135,13 @@ export class ResolvedAttributeSet extends refCounted {
             if (toMerge) {
                 const l: number = toMerge.set.length;
                 for (let i: number = 0; i < l; i++) {
+                    // don't pass in the context here
                     const rasMerged: ResolvedAttributeSet = rasResult.merge(toMerge.set[i]);
                     if (rasMerged !== rasResult) {
                         rasResult = rasMerged;
                     }
+                    // copy context here
+                    toMerge.copyAttCtxMappingsInto(rasResult.ra2attCtxSet, rasResult.attCtx2ra, toMerge.set[i]);
                 }
             }
 
@@ -224,6 +291,7 @@ export class ResolvedAttributeSet extends refCounted {
                     // attribute remains
                     // are we building a new set?
                     if (appliedAttSet) {
+                        this.copyAttCtxMappingsInto(appliedAttSet.ra2attCtxSet, appliedAttSet.attCtx2ra, resAtt);
                         appliedAttSet.merge(resAtt);
                     }
                     countIndex++;
@@ -234,6 +302,7 @@ export class ResolvedAttributeSet extends refCounted {
                     if (!appliedAttSet) {
                         appliedAttSet = new ResolvedAttributeSet();
                         for (let iCopy: number = 0; iCopy < iAtt; iCopy++) {
+                            this.copyAttCtxMappingsInto(appliedAttSet.ra2attCtxSet, appliedAttSet.attCtx2ra, this.set[iCopy]);
                             appliedAttSet.merge(this.set[iCopy]);
                         }
                     }
@@ -403,10 +472,24 @@ export class ResolvedAttributeSet extends refCounted {
         // let bodyCode = () =>
         {
             const copy: ResolvedAttributeSet = new ResolvedAttributeSet();
+            copy.attributeContext = this.attributeContext;
             const l: number = this.set.length;
+
+            // save the mappings to overwrite
+            // maps from merge may not be correct
+            const newRa2attCtxSet: Map<ResolvedAttribute, Set<ICdmAttributeContext>> = new Map<ResolvedAttribute, Set<ICdmAttributeContext>>();
+            const newAttCtx2ra: Map<ICdmAttributeContext, ResolvedAttribute> = new Map<ICdmAttributeContext, ResolvedAttribute>();
+
             for (let i: number = 0; i < l; i++) {
-                copy.merge(this.set[i].copy());
+                const sourceRa: ResolvedAttribute = this.set[i];
+                const copyRa: ResolvedAttribute = sourceRa.copy();
+
+                this.copyAttCtxMappingsInto(newRa2attCtxSet, newAttCtx2ra, sourceRa, copyRa);
+                copy.merge(copyRa);
             }
+            // reset mappings to the correct one
+            copy.ra2attCtxSet = newRa2attCtxSet;
+            copy.attCtx2ra = newAttCtx2ra;
 
             return copy;
         }

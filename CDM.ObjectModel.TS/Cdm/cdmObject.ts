@@ -15,6 +15,9 @@ import {
     CorpusImpl,
     DataTypeReference,
     DataTypeReferenceImpl,
+    DocSet,
+    DocSetCollection,
+    docsResult,
     DocumentImpl,
     EntityAttribute,
     EntityAttributeImpl,
@@ -418,23 +421,52 @@ export abstract class cdmObject implements ICdmObject {
         // return p.measure(bodyCode);
     }
 
+    public generateDocumentRefSet(ctx: resolveContext, resOpt: resolveOptions): void {
+        // let bodyCode = () =>
+        {
+            resOpt.documentRefSet = new DocSetCollection();
+            // put in docs where this thing is defined. if only one document, then don't add
+            // if only one doc, then only one choice on resolve time too
+            const defIn: docsResult = ctx.corpus.docsForSymbol(ctx.currentDoc, ctx.currentDoc, '');
+
+            if (defIn.docList && defIn.docList.length > 1) {
+                resOpt.documentRefSet.add(new DocSet(defIn.docList));
+            }
+        }
+        // return p.measure(bodyCode);
+    }
+
     public getResolvedTraits(resOpt: resolveOptions): ResolvedTraitSet {
         // let bodyCode = () =>
         {
+            const kind: string = 'rtsb';
             const ctx: resolveContext = this.ctx as resolveContext;
-            const cacheTagA: string = ctx.corpus.getDefinitionCacheTag(resOpt, this, 'rtsb');
+            let cacheTagA: string = ctx.corpus.getDefinitionCacheTag(resOpt, this, kind);
 
             let rtsbAll: ResolvedTraitSetBuilder;
             if (!this.traitCache) {
                 this.traitCache = new Map<string, ResolvedTraitSetBuilder>();
             } else {
-                rtsbAll = this.traitCache.get(cacheTagA);
+                rtsbAll = cacheTagA ? this.traitCache.get(cacheTagA) : null;
             }
 
+            // store the previous document set, we will need to add it with
+            // children found from the constructResolvedTraits call
+            const currDocRefSet: DocSetCollection = resOpt.documentRefSet || new DocSetCollection();
+            resOpt.documentRefSet = new DocSetCollection();
+
             if (!rtsbAll) {
+                // copy resolve options but use same doc ref set
+                const oldResOpt: resolveOptions = resOpt;
                 resOpt = cdmObject.copyResolveOptions(resOpt);
+                resOpt.documentRefSet = oldResOpt.documentRefSet;
+
                 rtsbAll = new ResolvedTraitSetBuilder();
                 this.constructResolvedTraits(rtsbAll, resOpt);
+
+                // register set of possible docs
+                ctx.corpus.registerDefinitionReferenceDocuments(this.getObjectDef(resOpt), kind, resOpt.documentRefSet);
+
                 if (rtsbAll.rts) {
                     // update the directives
                     if (rtsbAll.rts.applierCaps) {
@@ -444,8 +476,19 @@ export abstract class cdmObject implements ICdmObject {
                     // nothing came back, but others will assume there is a set in this builder
                     rtsbAll.rts = new ResolvedTraitSet(resOpt);
                 }
+                // get the new cache tag now that we have the list of docs
+                cacheTagA = ctx.corpus.getDefinitionCacheTag(resOpt, this, kind);
                 this.traitCache.set(cacheTagA, rtsbAll);
+            } else {
+                // cache was found
+                // get the DocSetCollection for this cached object
+                const key: string = CorpusImpl.getCacheKeyFromObject(this, kind);
+                resOpt.documentRefSet = ctx.corpus.definitionReferenceDocuments.get(key);
             }
+
+            // merge child document set with current
+            currDocRefSet.merge(resOpt.documentRefSet);
+            resOpt.documentRefSet = currDocRefSet;
 
             return rtsbAll.rts;
         }
@@ -454,10 +497,16 @@ export abstract class cdmObject implements ICdmObject {
     public getResolvedAttributes(resOpt: resolveOptions, acpInContext?: AttributeContextParameters): ResolvedAttributeSet {
         // let bodyCode = () =>
         {
+            const kind: string = 'rasb';
             const ctx: resolveContext = this.ctx as resolveContext; // what it actually is
-            const cacheTag: string = ctx.corpus.getDefinitionCacheTag(resOpt, this, 'rasb', acpInContext ? 'ctx' : '');
-            let rasbCache: ResolvedAttributeSetBuilder = ctx.cache.get(cacheTag);
+            let cacheTag: string = ctx.corpus.getDefinitionCacheTag(resOpt, this, kind, acpInContext ? 'ctx' : '');
+            let rasbCache: ResolvedAttributeSetBuilder = cacheTag ? ctx.cache.get(cacheTag) : null;
             let underCtx: AttributeContextImpl;
+
+            // store the previous document set, we will need to add it with
+            // children found from the constructResolvedTraits call
+            const currDocRefSet: DocSetCollection = resOpt.documentRefSet || new DocSetCollection();
+            resOpt.documentRefSet = new DocSetCollection();
 
             if (!rasbCache) {
                 if (this.resolvingAttributes) {
@@ -474,27 +523,30 @@ export abstract class cdmObject implements ICdmObject {
                 rasbCache = this.constructResolvedAttributes(resOpt, underCtx);
                 this.resolvingAttributes = false;
 
+                // register set of possible docs
+                ctx.corpus.registerDefinitionReferenceDocuments(this.getObjectDef(resOpt), kind, resOpt.documentRefSet);
+
+                // get the new cache tag now that we have the list of docs
+                cacheTag = ctx.corpus.getDefinitionCacheTag(resOpt, this, kind, acpInContext ? 'ctx' : '');
                 // save this as the cached version
                 ctx.cache.set(cacheTag, rasbCache);
-
-                // if a context was built, collect the mapping from contextID to objects
-                // (this is needed to let resolved attributes from this set locate the context they are created underCtx)
-                if (underCtx) {
-                    underCtx.collectIdMap(undefined);
-                }
             } else {
+                // get the DocSetCollection for this cached object and pass that back
+                const key: string = CorpusImpl.getCacheKeyFromObject(this, kind);
+                resOpt.documentRefSet = ctx.corpus.definitionReferenceDocuments.get(key);
+
                 // cache found. if we are building a context, then fix what we got instead of making a new one
                 if (acpInContext) {
-                    // copy the content  of the cached context into this context
-                    underCtx = rasbCache.attributeContext.copy(resOpt) as AttributeContextImpl;
-                    underCtx.setParent(resOpt, acpInContext.under as AttributeContextImpl);
-                    // given this new context copy, mapp it
-                    underCtx.collectIdMap(undefined);
-                    // because some of the atts may be pointing right at this new context and will be using the ID for the old parent,
-                    // make the old ID point here too
-                    underCtx.id2ctx.set(rasbCache.attributeContext.ID, underCtx);
+                    // make the new context
+                    underCtx = AttributeContextImpl.createChildUnder(resOpt, acpInContext);
+
+                    (rasbCache.ras.attributeContext as AttributeContextImpl).copyAttributeContextTree(resOpt, underCtx, rasbCache.ras);
                 }
             }
+
+            // merge child document set with current
+            currDocRefSet.merge(resOpt.documentRefSet);
+            resOpt.documentRefSet = currDocRefSet;
 
             return rasbCache.ras;
         }

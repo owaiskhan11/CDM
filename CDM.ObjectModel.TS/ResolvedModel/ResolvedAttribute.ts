@@ -1,4 +1,5 @@
 import {
+    AttributeContextImpl,
     ICdmAttributeDef,
     ICdmObject,
     ResolvedAttributeSet,
@@ -69,17 +70,17 @@ export class ResolvedAttribute {
     public resolvedName: string;
     public resolvedTraits: ResolvedTraitSet;
     public insertOrder: number;
-    public createdContextId: number;
+    public attCtx: AttributeContextImpl;
     public applierState?: any;
     private t2pm: traitToPropertyMap;
 
-    constructor(resOpt: resolveOptions, target: ResolutionTarget, defaultName: string, createdContextId: number) {
+    constructor(resOpt: resolveOptions, target: ResolutionTarget, defaultName: string, attCtx: AttributeContextImpl) {
         // let bodyCode = () =>
         {
             this.target = target;
             this.resolvedTraits = new ResolvedTraitSet(resOpt);
             this.resolvedName = defaultName;
-            this.createdContextId = createdContextId;
+            this.attCtx = attCtx;
         }
         // return p.measure(bodyCode);
     }
@@ -87,7 +88,7 @@ export class ResolvedAttribute {
         // let bodyCode = () =>
         {
             const resOpt: resolveOptions = this.resolvedTraits.resOpt; // use the options from the traits
-            const copy: ResolvedAttribute = new ResolvedAttribute(resOpt, this.target, this.resolvedName, this.createdContextId);
+            const copy: ResolvedAttribute = new ResolvedAttribute(resOpt, this.target, this.resolvedName, this.attCtx);
             copy.resolvedTraits = this.resolvedTraits.shallowCopy();
             copy.insertOrder = this.insertOrder;
             if (this.applierState) {
@@ -106,6 +107,17 @@ export class ResolvedAttribute {
             this.resolvedTraits.spew(resOpt, to, `${indent}-`, nameSort);
         }
         // return p.measure(bodyCode);
+    }
+
+    public completeContext(resOpt: resolveOptions): void {
+        if (this.attCtx && !this.attCtx.name) {
+            this.attCtx.name = this.resolvedName;
+            // type guard later
+            if ((this.target as ICdmAttributeDef).createSimpleReference) {
+                this.attCtx.definition = (this.target as ICdmAttributeDef).createSimpleReference(resOpt);
+            }
+            this.attCtx.corpusPath = `${(this.attCtx.parent.getObjectDef(resOpt) as AttributeContextImpl).corpusPath}/${this.resolvedName}`;
+        }
     }
 
     private getTraitToPropertyMap(): traitToPropertyMap {

@@ -6,6 +6,8 @@ import {
     cdmObjectDef,
     cdmObjectType,
     copyOptions,
+    CorpusImpl,
+    DocSetCollection,
     friendlyFormatNode,
     ICdmAttributeContext,
     ICdmObject,
@@ -215,8 +217,10 @@ export class TraitImpl extends cdmObjectDef implements ICdmTraitDef {
     public getHasParameterDefs(): ICdmParameterDef[] {
         // let bodyCode = () =>
         {
-            if (!this.hasParameters)
+            if (!this.hasParameters) {
                 this.hasParameters = [];
+            }
+
             return this.hasParameters;
         }
         // return p.measure(bodyCode);
@@ -293,6 +297,7 @@ export class TraitImpl extends cdmObjectDef implements ICdmTraitDef {
     public getResolvedTraits(resOpt: resolveOptions): ResolvedTraitSet {
         // let bodyCode = () =>
         {
+            const kind: string = 'rtsb';
             const ctx: resolveContext = this.ctx as resolveContext;
             // this may happen 0, 1 or 2 times. so make it fast
             let baseTrait: ICdmTraitDef;
@@ -305,7 +310,7 @@ export class TraitImpl extends cdmObjectDef implements ICdmTraitDef {
                         if (baseTrait) {
                             baseRts = this.extendsTrait.getResolvedTraits(resOpt);
                             if (baseRts && baseRts.size === 1) {
-                                const basePv: ParameterValueSet = baseRts.get(baseTrait).parameterValues;
+                                const basePv: ParameterValueSet = baseRts.get(baseTrait) ? baseRts.get(baseTrait).parameterValues : null;
                                 if (basePv) {
                                     baseValues = basePv.values;
                                 }
@@ -331,8 +336,14 @@ export class TraitImpl extends cdmObjectDef implements ICdmTraitDef {
                 cacheTagExtra = this.extendsTrait.ID.toString();
             }
 
-            const cacheTag: string = ctx.corpus.getDefinitionCacheTag(resOpt, this, 'rtsb', cacheTagExtra);
-            let rtsResult: ResolvedTraitSet = ctx.cache.get(cacheTag);
+            let cacheTag: string = ctx.corpus.getDefinitionCacheTag(resOpt, this, kind, cacheTagExtra);
+            let rtsResult: ResolvedTraitSet = cacheTag ? ctx.cache.get(cacheTag) : null;
+
+            // store the previous document set, we will need to add it with
+            // children found from the constructResolvedTraits call
+            const currDocRefSet: DocSetCollection = resOpt.documentRefSet || new DocSetCollection();
+            resOpt.documentRefSet = new DocSetCollection();
+
             // if not, then make one and save it
             if (!rtsResult) {
                 getBaseInfo();
@@ -381,8 +392,20 @@ export class TraitImpl extends cdmObjectDef implements ICdmTraitDef {
                     rtsResult.collectDirectives(resOpt.directives);
                 }
 
+                // register set of possible docs
+                ctx.corpus.registerDefinitionReferenceDocuments(this.getObjectDef(resOpt), kind, resOpt.documentRefSet);
+                // get the new cache tag now that we have the list of docs
+                cacheTag = ctx.corpus.getDefinitionCacheTag(resOpt, this, kind, cacheTagExtra);
                 ctx.cache.set(cacheTag, rtsResult);
+            } else {
+                // cache found
+                // get the DocSetCollection for this cached object
+                const key: string = CorpusImpl.getCacheKeyFromObject(this, kind);
+                resOpt.documentRefSet = ctx.corpus.definitionReferenceDocuments.get(key);
             }
+            // merge child document set with current
+            currDocRefSet.merge(resOpt.documentRefSet);
+            resOpt.documentRefSet = currDocRefSet;
 
             return rtsResult;
         }

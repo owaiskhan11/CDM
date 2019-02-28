@@ -367,7 +367,7 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
             // the relationsip of the attribute, the attribute definition itself and included attribute groups,
             //  any traits applied to the attribute.
             this.rasb = new ResolvedAttributeSetBuilder();
-            this.rasb.setAttributeContext(under);
+            this.rasb.ras.setAttributeContext(under);
 
             if (this.extendsEntity) {
                 const extRef: ICdmObjectRef = this.getExtendsEntityRef();
@@ -381,7 +381,7 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
                         regarding: undefined,
                         includeTraits: false
                     };
-                    extendsRefUnder = this.rasb.createAttributeContext(resOpt, acpExt);
+                    extendsRefUnder = this.rasb.ras.createAttributeContext(resOpt, acpExt);
                     acpExtEnt = {
                         under: extendsRefUnder,
                         type: cdmAttributeContextType.entity,
@@ -394,7 +394,7 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
                     .getResolvedAttributes(resOpt, acpExtEnt));
             }
             this.rasb.markInherited();
-            this.rasb.setAttributeContext(under);
+            this.rasb.ras.setAttributeContext(under);
 
             if (this.hasAttributes) {
                 for (const att of this.hasAttributes) {
@@ -413,7 +413,7 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
             }
 
             this.rasb.markOrder();
-            this.rasb.setAttributeContext(under);
+            this.rasb.ras.setAttributeContext(under);
 
             // things that need to go away
             this.rasb.removeRequestedAtts();
@@ -507,7 +507,7 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
             // make the top level attribute context for this entity
             const entName: string = newEntName;
             const ctx: resolveContext = this.ctx as resolveContext;
-            const attCtxEnt: AttributeContextImpl = ctx.corpus.MakeObject(cdmObjectType.attributeContextDef, entName, true);
+            let attCtxEnt: AttributeContextImpl = ctx.corpus.MakeObject(cdmObjectType.attributeContextDef, entName, true);
             attCtxEnt.ctx = ctx;
             attCtxEnt.docCreatedIn = this.docCreatedIn;
 
@@ -534,14 +534,11 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
             // points to the level of the context where it was created
             const ras: ResolvedAttributeSet = this.getResolvedAttributes(resOptCopy, acpEnt);
 
-            // will be making some destructive changes, so swap in a copy
-            const attCtx: ICdmObject = attCtxAC.getContentRefs()[0]
-                .copy(resOptCopy);
-            attCtxAC.getContentRefs()
-                .splice(0);
-            (attCtx as AttributeContextImpl).setParent(resOpt, attCtxAC);
-            // the context should now contain a mapping from ID to context node. the resolved attributes will use these IDs
-            const id2ctx: Map<Number, AttributeContextImpl> = (attCtx as AttributeContextImpl).id2ctx;
+            // create a new copy of the attribute context for this entity
+            const allAttCtx: Set<AttributeContextImpl> = new Set<AttributeContextImpl>();
+            const newNode: AttributeContextImpl = attCtxEnt.copyNode(resOpt) as AttributeContextImpl;
+            attCtxEnt = attCtxEnt.copyAttributeContextTree(resOpt, newNode, ras, allAttCtx);
+            const attCtx: ICdmAttributeContext = (attCtxEnt.getContentRefs()[0] as ICdmAttributeContext).getContentRefs()[0] as ICdmAttributeContext;
 
             // the attributes have been named, shaped, etc for this entity so now it is safe to go and
             // make each attribute context level point at these final versions of attributes
@@ -549,7 +546,15 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
             const pointContextAtResolvedAtts: (rasSub: ResolvedAttributeSet, path: string) => void
                 = (rasSub: ResolvedAttributeSet, path: string): void => {
                     rasSub.set.forEach((ra: ResolvedAttribute) => {
-                        const raCtx: AttributeContextImpl = id2ctx.get(ra.createdContextId);
+                        let raCtx: ICdmAttributeContext;
+                        const raCtxSet: Set<ICdmAttributeContext> = rasSub.ra2attCtxSet.get(ra);
+                        // find the correct attCtx for this copy
+                        for (const currAttCtx of allAttCtx) {
+                            if (raCtxSet.has(currAttCtx)) {
+                                raCtx = currAttCtx;
+                                break;
+                            }
+                        }
                         if (raCtx) {
                             const refs: (ICdmObjectRef | ICdmAttributeContext)[] = raCtx.getContentRefs();
                             // this won't work when I add the structured attributes to avoid name collisions
@@ -595,7 +600,7 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
 
                     return isEmpty;
                 };
-            findEmpty(attCtx as ICdmAttributeContext);
+            findEmpty(attCtx);
             // remove all the empties that were found
             emptyStructures.forEach((empty: [ICdmAttributeContext, ICdmAttributeContext]) => {
                 const content: (ICdmObjectRef | ICdmAttributeContext)[] = empty['0'].getContentRefs();
@@ -654,7 +659,7 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
 
             // make the empty entity
             let entResolved: ICdmEntityDef = docRes.addDefinition<ICdmEntityDef>(cdmObjectType.entityDef, entName);
-            entResolved.attributeContext = attCtx as ICdmAttributeContext;
+            entResolved.attributeContext = attCtx;
 
             // add the traits of the entity
             const rtsEnt: ResolvedTraitSet = this.getResolvedTraits(resOpt);
@@ -686,7 +691,7 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
                         });
 
                 };
-            collectContextTraits(attCtx as ICdmAttributeContext, new Set<string>());
+            collectContextTraits(attCtx, new Set<string>());
 
             // add the attributes, put them in attribute groups if structure needed
             const resAtt2RefPath: Map<ResolvedAttribute, string> = new Map<ResolvedAttribute, string>();
@@ -695,14 +700,23 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
                     rasSub.set.forEach((ra: ResolvedAttribute) => {
                         const attPath: string = path + ra.resolvedName;
                         // use the path of the context associated with this attribute to find the new context that matches on path
-                        const raCtx: AttributeContextImpl = id2ctx.get(ra.createdContextId);
+                        const raCtxSet: Set<ICdmAttributeContext> = rasSub.ra2attCtxSet.get(ra);
+                        let raCtx: AttributeContextImpl;
+                        // find the correct attCtx for this copy
+                        for (const currAttCtx of allAttCtx) {
+                            if (raCtxSet.has(currAttCtx)) {
+                                raCtx = currAttCtx;
+                                break;
+                            }
+                        }
+
                         if ((ra.target as ResolvedAttributeSet).set) {
                             // this is a set of attributes.
                             // make an attribute group to hold them
                             const attGrp: ICdmAttributeGroupDef = this.ctx.corpus.MakeObject(
                                 cdmObjectType.attributeGroupDef, ra.resolvedName);
                             attGrp.attributeContext = this.ctx.corpus.MakeObject(
-                                cdmObjectType.attributeContextRef, raCtx.getRelativePath(resOpt), true);
+                                cdmObjectType.attributeContextRef, raCtx.corpusPath, true);
                             // take any traits from the set and make them look like traits exhibited by the group
                             const avoidSet: Set<string> = ctx2traitNames.get(raCtx);
                             const rtsAtt: ResolvedTraitSet = ra.resolvedTraits;
@@ -725,7 +739,7 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
                         } else {
                             const att: ICdmTypeAttributeDef = this.ctx.corpus.MakeObject(cdmObjectType.typeAttributeDef, ra.resolvedName);
                             att.attributeContext = this.ctx.corpus.MakeObject(
-                                cdmObjectType.attributeContextRef, raCtx.getRelativePath(resOpt), true);
+                                cdmObjectType.attributeContextRef, raCtx.corpusPath, true);
                             const avoidSet: Set<string> = ctx2traitNames.get(raCtx);
                             const rtsAtt: ResolvedTraitSet = ra.resolvedTraits;
                             rtsAtt.set.forEach((rt: ResolvedTrait) => {
@@ -808,7 +822,7 @@ export class EntityImpl extends cdmObjectDef implements ICdmEntityDef {
                         });
 
                 };
-            fixContextTraits(attCtx as ICdmAttributeContext, newEntName);
+            fixContextTraits(attCtx, newEntName);
             // and the attribute traits
             const entAtts: (ICdmAttributeGroupRef | ICdmTypeAttributeDef | ICdmEntityAttributeDef)[] = entResolved.getHasAttributeDefs();
             if (entAtts) {

@@ -14,7 +14,7 @@ export abstract class cdmObjectSimple extends cdmObject {
     public getObjectDefName(): string {
         return undefined;
     }
-    public getObjectDef(resOpt: resolveOptions): ICdmObjectDef {
+    public getObjectDef(resOpt: resolveOptions) {
         return undefined;
     }
     public createSimpleReference(resOpt: resolveOptions): ICdmObjectRef {

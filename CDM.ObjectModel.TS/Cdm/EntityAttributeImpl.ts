@@ -253,7 +253,7 @@ export class EntityAttributeImpl extends AttributeImpl implements ICdmEntityAttr
             if (relInfo.isFlexRef || relInfo.isLegacyRef) {
                 // make the entity context that a real recursion would have give us
                 if (under) {
-                    under = rasb.createAttributeContext(resOpt, acpEnt);
+                    under = rasb.ras.createAttributeContext(resOpt, acpEnt);
                 }
                 // if selecting from one of many attributes, then make a context for each one
                 if (under && relInfo.selectsOne) {
@@ -279,7 +279,7 @@ export class EntityAttributeImpl extends AttributeImpl implements ICdmEntityAttr
                                     regarding: attsPick[i],
                                     includeTraits: true
                                 };
-                                const pickUnder: ICdmAttributeContext = rasb.createAttributeContext(resOpt, acpEntAtt);
+                                const pickUnder: ICdmAttributeContext = rasb.ras.createAttributeContext(resOpt, acpEntAtt);
                                 // and the entity under that attribute
                                 const pickEnt: ICdmEntityRef = (attsPick[i] as ICdmEntityAttributeDef).getEntityRef();
                                 const acpEntAttEnt: AttributeContextParameters = {
@@ -289,7 +289,7 @@ export class EntityAttributeImpl extends AttributeImpl implements ICdmEntityAttr
                                     regarding: pickEnt,
                                     includeTraits: true
                                 };
-                                rasb.createAttributeContext(resOpt, acpEntAttEnt);
+                                rasb.ras.createAttributeContext(resOpt, acpEntAttEnt);
                             }
                         }
                     }
@@ -302,12 +302,13 @@ export class EntityAttributeImpl extends AttributeImpl implements ICdmEntityAttr
                 }
             } else {
                 const resLink: resolveOptions = cdmObject.copyResolveOptions(resOpt);
+                resLink.documentRefSet = resOpt.documentRefSet;
                 resLink.relationshipDepth = relInfo.nextDepth;
                 rasb.mergeAttributes((this.entity as ICdmEntityRef).getResolvedAttributes(resLink, acpEnt));
             }
 
             // from the traits of relationship and applied here, see if new attributes get generated
-            rasb.setAttributeContext(underAtt);
+            rasb.ras.setAttributeContext(underAtt);
             rasb.applyTraits();
             rasb.generateTraitAttributes(true); // true = apply the prepared traits to new atts
             if (rasb.ras && rasb.ras.set && (relInfo.isFlexRef || relInfo.isLegacyRef)) {
@@ -366,7 +367,7 @@ export class EntityAttributeImpl extends AttributeImpl implements ICdmEntityAttr
             // a 'structured' directive wants to keep all entity attributes together in a group
             if (rtsThisAtt && rtsThisAtt.resOpt.directives && rtsThisAtt.resOpt.directives.has('structured')) {
                 const raSub: ResolvedAttribute = new ResolvedAttribute(
-                    rtsThisAtt.resOpt, rasb.ras, this.name, rasb.attributeContext ? rasb.attributeContext.ID : -1);
+                    rtsThisAtt.resOpt, rasb.ras, this.name, rasb.ras.attributeContext as AttributeContextImpl);
                 if (relInfo.isArray) {
                     // put a resolved trait on this att group, yuck,
                     //  hope I never need to do this again and then need to make a function for this

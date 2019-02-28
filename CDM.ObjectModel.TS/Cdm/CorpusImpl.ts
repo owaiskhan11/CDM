@@ -15,6 +15,8 @@ import {
     ConstantEntityImpl,
     DataTypeImpl,
     DataTypeReferenceImpl,
+    DocSet,
+    DocSetCollection,
     docsResult,
     DocumentImpl,
     EntityAttributeImpl,
@@ -66,7 +68,7 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
     public directory: Map<DocumentImpl, FolderImpl>;
     public pathLookup: Map<string, [FolderImpl, DocumentImpl]>;
     public symbolDefinitions: Map<string, DocumentImpl[]>;
-    public defintionReferenceDocuments: Map<cdmObject, Set<DocumentImpl>>;
+    public definitionReferenceDocuments: Map<string, DocSetCollection>;
     public defintionWrtTag: Map<string, string>;
     public emptyRTS: Map<string, ResolvedTraitSet>;
 
@@ -80,7 +82,7 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
             this.pathLookup = new Map<string, [FolderImpl, DocumentImpl]>();
             this.directory = new Map<DocumentImpl, FolderImpl>();
             this.symbolDefinitions = new Map<string, DocumentImpl[]>();
-            this.defintionReferenceDocuments = new Map<cdmObject, Set<DocumentImpl>>();
+            this.definitionReferenceDocuments = new Map<string, DocSetCollection>();
             this.defintionWrtTag = new Map<string, string>();
             this.emptyRTS = new Map<string, ResolvedTraitSet>();
 
@@ -139,6 +141,49 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
                 case cdmObjectType.attributeContextDef:
                 case cdmObjectType.attributeContextRef:
                     return cdmObjectType.attributeContextRef;
+            }
+        }
+        // return p.measure(bodyCode);
+    }
+
+    public static getCacheKeyFromObject(definition: ICdmObject, kind: string): string {
+        return `${definition.ID}-${kind}`;
+    }
+
+    private static getPriorityDoc(docs: DocSet, importPriority: Map<DocumentImpl, number>): DocumentImpl {
+        // let bodyCode = () =>
+        {
+            let docBest: DocumentImpl;
+            let indexBest: number = Number.MAX_SAFE_INTEGER;
+            for (const docDefined of docs) {
+                // is this one of the imported docs?
+                const indexFound: number = importPriority.get(docDefined);
+                if (indexFound < indexBest) {
+                    indexBest = indexFound;
+                    docBest = docDefined;
+                    if (indexBest === 0) {
+                        break;
+                    } // hard to be better than the best
+                }
+            }
+
+            return docBest;
+        }
+        // return p.measure(bodyCode);
+    }
+
+    private static passReferenceDocsToParent(dependentDocsStack: DocSetCollection[], documentRefSet: DocSetCollection): void {
+        // let bodyCode = () =>
+        {
+            if (dependentDocsStack.length > 0) {
+                // the next to pop off is the outer object, this could go many layers up
+                const outerSet: DocSetCollection = dependentDocsStack[dependentDocsStack.length - 1];
+                // store the docs for this ref in the outer object
+                for (const docSet of documentRefSet) {
+                    if (docSet.size > 1) {
+                        outerSet.add(docSet);
+                    }
+                }
             }
         }
         // return p.measure(bodyCode);
@@ -214,6 +259,7 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
                 if (preEnd > 0) {
                     const prefix: string = symbolDef.slice(0, preEnd);
                     result.newSymbol = symbolDef.slice(preEnd + 1);
+                    result.docList = this.symbolDefinitions.get(result.newSymbol);
                     if (fromDoc && fromDoc.monikerPriorityMap && fromDoc.monikerPriorityMap.has(prefix)) {
                         result.docBest = fromDoc.monikerPriorityMap.get(prefix);
                     } else if (wrtDoc.monikerPriorityMap && wrtDoc.monikerPriorityMap.has(prefix)) {
@@ -248,8 +294,15 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
             const symbolDocsResult: docsResult = this.docsForSymbol(wrtDoc, fromDoc, symbolDef);
             let docBest: DocumentImpl = symbolDocsResult.docBest;
             symbolDef = symbolDocsResult.newSymbol;
-            const docs: DocumentImpl[] = symbolDocsResult.docList;
+            const docs: DocSet = new DocSet(symbolDocsResult.docList);
             if (docs) {
+                // add possible docs to resOpt, we will need this when caching
+                if (docs.size > 1) {
+                    if (!resOpt.documentRefSet) {
+                        resOpt.documentRefSet = new DocSetCollection();
+                    }
+                    resOpt.documentRefSet.add(docs);
+                }
                 // for the given doc, there is a sorted list of imported docs (including the doc itself as item 0).
                 // find the lowest number imported document that has a definition for this symbol
                 const importPriority: Map<DocumentImpl, number> = wrtDoc.importPriority;
@@ -257,17 +310,8 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
                     return undefined;
                 } // need to index imports first, should have happened
 
-                let indexBest: number = Number.MAX_SAFE_INTEGER;
-                for (const docDefined of docs) {
-                    // is this one of the imported docs?
-                    const indexFound: number = importPriority.get(docDefined);
-                    if (indexFound < indexBest) {
-                        indexBest = indexFound;
-                        docBest = docDefined;
-                        if (indexBest === 0) {
-                            break;
-                        } // hard to be better than the best
-                    }
+                if (!docBest) {
+                    docBest = CorpusImpl.getPriorityDoc(docs, importPriority) || docBest;
                 }
             }
 
@@ -288,20 +332,20 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
         // return p.measure(bodyCode);
     }
 
-    public registerDefinitionReferenceDocuments(definition: cdmObject, docRefSet: Set<DocumentImpl>): void {
+    public registerDefinitionReferenceDocuments(definition: ICdmObject, kind: string, docRefSet: DocSetCollection): void {
         // let bodyCode = () =>
         {
-            if (docRefSet.size > 1) {
-                this.defintionReferenceDocuments.set(definition, docRefSet);
-            }
+            const key: string = CorpusImpl.getCacheKeyFromObject(definition, kind);
+            this.definitionReferenceDocuments.set(key, docRefSet);
         }
         // return p.measure(bodyCode);
     }
 
-    public unRegisterDefinitionReferenceDocuments(definition: cdmObject): void {
+    public unRegisterDefinitionReferenceDocuments(definition: ICdmObject, kind: string): void {
         // let bodyCode = () =>
         {
-            this.defintionReferenceDocuments.delete(definition);
+            const key: string = CorpusImpl.getCacheKeyFromObject(definition, kind);
+            this.definitionReferenceDocuments.delete(key);
         }
         // return p.measure(bodyCode);
     }
@@ -345,47 +389,32 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
 
             // is there a registered set?
             // (for the objectdef, not for a reference) of the many documents involved in defining this thing(might be none)
-            const docsRef: Set<DocumentImpl> = this.defintionReferenceDocuments.get(
-                definition.getObjectDef(resOpt) as ICdmObject as cdmObject);
+            const key: string = CorpusImpl.getCacheKeyFromObject(definition.getObjectDef(resOpt), kind);
+            const docsRef: DocSetCollection = this.definitionReferenceDocuments.get(key);
+
             if (docsRef) {
-                // already solved this?
-                let cacheTagCacheTag: string = '';
-                for (const d of docsRef) {
-                    cacheTagCacheTag += `-${d.ID.toString()}`;
-                }
-                cacheTagCacheTag += resOpt.wrtDoc ? resOpt.wrtDoc.ID.toString() : 'none';
-                let tagPre: string = this.defintionWrtTag.get(cacheTagCacheTag);
-                if (!tagPre) {
-                    // need to figure it out
-                    if (resOpt.wrtDoc) {
-                        const wrtDoc: DocumentImpl = (resOpt.wrtDoc as DocumentImpl);
-                        tagPre = 'using (';
-                        const importPriority: Map<DocumentImpl, number> = wrtDoc.importPriority;
-                        if (importPriority) {
-                            // find each ref in the set of imports and store a list
-                            const foundRefs: ([number, DocumentImpl])[] = [];
-                            for (const docRef of docsRef) {
-                                const iFound: number = importPriority.get(docRef);
-                                if (iFound !== undefined) {
-                                    foundRefs.push([iFound, docRef]);
-                                }
+                // each set has doc options. use importPriority to figure out which one we want
+                const wrtDoc: DocumentImpl = (resOpt.wrtDoc as DocumentImpl);
+                const foundDocIds: Set<number> = new Set<number>();
+                if (wrtDoc.importPriority) {
+                    for (const docSet of docsRef) {
+                        // we only add the best doc if there are multiple options
+                        if (docSet.size > 1) {
+                            const docBest: DocumentImpl = CorpusImpl.getPriorityDoc(docSet, wrtDoc.importPriority);
+                            if (docBest) {
+                                foundDocIds.add(docBest.ID);
                             }
-                            // sort that and make a list
-                            foundRefs.sort(
-                                (l: [number, DocumentImpl], r: [number, DocumentImpl]) => { return l['0'] - r['0']; })
-                                .forEach((r: [number, DocumentImpl]): void => { tagPre += `-${r['1'].ID.toString()}`; });
                         }
-                        tagPre += ') ';
-                    } else {
-                        tagPre = 'using nothing ';
                     }
-                    // remember
-                    this.defintionWrtTag.set(cacheTagCacheTag, tagPre);
                 }
+                const tagPre: string = Array.from(foundDocIds)
+                    .sort()
+                    .join('-');
 
                 return tagPre + tagSuffix;
             } else {
-                return tagSuffix;
+                // reference docs need to be solved before we can generate a cache tag
+                return undefined;
             }
         }
         // return p.measure(bodyCode);
@@ -822,7 +851,7 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
                         case cdmObjectType.constantEntityDef:
                         case cdmObjectType.attributeContextDef:
                             this.unRegisterSymbol(path, doc);
-                            this.unRegisterDefinitionReferenceDocuments(iObject as cdmObject);
+                            this.unRegisterDefinitionReferenceDocuments(iObject, 'rasb');
                         default:
                     }
 
@@ -950,8 +979,10 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
             // for every object defined, accumulate the set of documents that could be needed
             // to resolve the object AND any references it makes
             // this is a stack, since things get defined inside of things
-            const documentRefSetStack: (Set<DocumentImpl>)[] = [];
-            let documentRefSet: Set<DocumentImpl>;
+            const dependentDocsStack: (DocSetCollection)[] = [];
+            // each set within this set represents a set of dependencies for a given thing. Multiple sets means the outer object depends
+            // on multiple things that have their own dependencies
+            let documentRefSet: DocSetCollection;
 
             ctx.currentDoc.visit(
                 '',
@@ -970,16 +1001,14 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
                         case cdmObjectType.attributeContextDef:
                             if (path.indexOf('(unspecified)') === -1) {
                                 // a new thing being defined. push onto stack
-                                documentRefSet = new Set<DocumentImpl>();
-                                documentRefSetStack.push(documentRefSet);
+                                documentRefSet = new DocSetCollection();
                                 // put in the docs where this thing is defined. if only one document, then don't add.
-                                // if only one doc, then only one choice on resolve time too
                                 const defIn: docsResult = this.docsForSymbol(ctx.currentDoc, ctx.currentDoc, path);
-                                if (defIn.docList && defIn.docList.length > 1) {
-                                    for (const d of defIn.docList) {
-                                        documentRefSet.add(d);
-                                    }
+                                const docSet: DocSet = new DocSet(defIn.docList);
+                                if (docSet.size > 1) {
+                                    documentRefSet.add(docSet);
                                 }
+                                dependentDocsStack.push(documentRefSet);
                             }
                             break;
 
@@ -999,10 +1028,6 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
                             const ref: cdmObjectRef = iObject as cdmObjectRef;
                             const resNew: cdmObjectDef = ref.getObjectDef(resOpt);
 
-                            // a new reference. push onto stack. even if we can't look this up, ok because it pops off later
-                            documentRefSet = new Set<DocumentImpl>();
-                            documentRefSetStack.push(documentRefSet);
-
                             if (!resNew) {
                                 // it is 'ok' to not find entity refs sometimes
                                 const level: cdmStatusLevel = (ot === cdmObjectType.entityRef) ?
@@ -1017,11 +1042,10 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
                                 if (ref.namedReference) {
                                     // and store the docs
                                     const defIn: docsResult = this.docsForSymbol(ctx.currentDoc, ctx.currentDoc, ref.namedReference);
-                                    if (defIn.docList && defIn.docList.length > 1) {
-                                        for (const d of defIn.docList) {
-                                            documentRefSet.add(d);
-                                        }
-                                    }
+                                    // a new reference. push onto stack. even if we can't look this up, ok because it pops off later
+                                    documentRefSet = new DocSetCollection();
+                                    dependentDocsStack.push(documentRefSet);
+                                    documentRefSet.add(new DocSet(defIn.docList));
                                 } else {
                                     // object being defined inline inside a ref.
                                     // nothing to do now except wait for the def to make a new stack entry
@@ -1043,6 +1067,12 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
                             const param: ICdmParameterDef = iObject as ICdmParameterDef;
                             this.constTypeCheck(resOpt, param, undefined);
                             break;
+                        case cdmObjectType.attributeRef:
+                            // don't try to look these up now
+                            if ((iObject as AttributeReferenceImpl).namedReference
+                                && (iObject as AttributeReferenceImpl).namedReference.indexOf('(resolvedAttributes)') !== -1) {
+                                break;
+                            }
                         case cdmObjectType.entityDef:
                         case cdmObjectType.traitDef:
                         case cdmObjectType.relationshipDef:
@@ -1054,36 +1084,26 @@ export class CorpusImpl extends FolderImpl implements ICdmCorpusDef {
                         case cdmObjectType.attributeContextDef:
                             if (path.indexOf('(unspecified)') === -1) {
                                 // a new thing done being defined. pop off of stack
-                                documentRefSet = documentRefSetStack.pop();
+                                documentRefSet = dependentDocsStack.pop();
+                                CorpusImpl.passReferenceDocsToParent(dependentDocsStack, documentRefSet);
                                 // give the set to the corpus to track
-                                this.registerDefinitionReferenceDocuments(iObject as cdmObject, documentRefSet);
+                                this.registerDefinitionReferenceDocuments(iObject as cdmObject, 'rasb', documentRefSet);
                             }
                             break;
-
-                        case cdmObjectType.attributeRef:
-                            // don't try to look these up now.
-                            if ((iObject as AttributeReferenceImpl).namedReference
-                                && (iObject as AttributeReferenceImpl).namedReference.indexOf('(resolvedAttributes)') !== -1) {
-                                break;
-                            }
                         case cdmObjectType.attributeGroupRef:
                         case cdmObjectType.attributeContextRef:
                         case cdmObjectType.dataTypeRef:
                         case cdmObjectType.entityRef:
                         case cdmObjectType.relationshipRef:
                         case cdmObjectType.traitRef:
-                            // store the docs in for this ref in the outer object
-                            documentRefSet = documentRefSetStack.pop();
-                            if (documentRefSet.size > 1) {
-                                if (documentRefSetStack.length > 0) {
-                                    const outerSet: Set<DocumentImpl> = documentRefSetStack[documentRefSetStack.length - 1];
-                                    // the next to pop off is the outer object, this could go many layers up
-                                    for (const d of documentRefSet) {
-                                        outerSet.add(d);
-                                    }
-                                }
+                            if ((iObject as cdmObjectRef).getObjectDef(resOpt) && (iObject as cdmObjectRef).namedReference) {
+                                // a new thing done being defined. pop off of stack
+                                documentRefSet = dependentDocsStack.pop();
+                                CorpusImpl.passReferenceDocsToParent(dependentDocsStack, documentRefSet);
+                                // give the set to the corpus to track
+                                this.registerDefinitionReferenceDocuments(iObject as cdmObject, 'rasb', documentRefSet);
                             }
-                            this.registerDefinitionReferenceDocuments(iObject as cdmObject, documentRefSet);
+                            break;
                         default:
                     }
 

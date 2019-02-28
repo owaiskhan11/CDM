@@ -8,6 +8,8 @@ import {
     cdmObjectRef,
     cdmObjectType,
     copyOptions,
+    CorpusImpl,
+    DocSetCollection,
     friendlyFormatNode,
     ICdmArgumentDef,
     ICdmAttributeContext,
@@ -213,6 +215,7 @@ export class TraitReferenceImpl extends cdmObjectRef implements ICdmTraitRef {
     public getResolvedTraits(resOpt: resolveOptions): ResolvedTraitSet {
         // let bodyCode = () =>
         {
+            const kind: string = 'rtsb';
             const ctx: resolveContext = this.ctx as resolveContext;
             // get referenced trait
             const trait: TraitImpl = this.getObjectDef<ICdmTraitDef>(resOpt) as TraitImpl;
@@ -229,14 +232,29 @@ export class TraitReferenceImpl extends cdmObjectRef implements ICdmTraitRef {
             }
 
             const cacheByName: boolean = !trait.thisIsKnownToHaveParameters;
-            const cacheTag: string = ctx.corpus.getDefinitionCacheTag(resOpt, this, 'rtsb', '', cacheByName);
-            let rtsResult: ResolvedTraitSet = ctx.cache.get(cacheTag);
+            let cacheTag: string = ctx.corpus.getDefinitionCacheTag(resOpt, this, kind, '', cacheByName);
+            let rtsResult: ResolvedTraitSet = cacheTag ? ctx.cache.get(cacheTag) : null;
+
+            // store the previous document set, we will need to add it with
+            // children found from the constructResolvedTraits call
+            const currDocRefSet: DocSetCollection = resOpt.documentRefSet || new DocSetCollection();
+            resOpt.documentRefSet = new DocSetCollection();
 
             // if not, then make one and save it
             if (!rtsResult) {
                 // get the set of resolutions, should just be this one trait
                 if (!rtsTrait) {
+                    // store current doc ref set
+                    const newDocRefSet: DocSetCollection = resOpt.documentRefSet;
+                    resOpt.documentRefSet = new DocSetCollection();
+
                     rtsTrait = trait.getResolvedTraits(resOpt);
+
+                    // bubble up document set from children
+                    if (newDocRefSet) {
+                        newDocRefSet.merge(resOpt.documentRefSet);
+                    }
+                    resOpt.documentRefSet = newDocRefSet;
                 }
                 if (rtsTrait) {
                     rtsResult = rtsTrait.deepCopy();
@@ -265,8 +283,23 @@ export class TraitReferenceImpl extends cdmObjectRef implements ICdmTraitRef {
                         rtsResult.setParameterValueFromArgument(trait, a);
                     }
                 }
+
+                // register set of possible docs
+                ctx.corpus.registerDefinitionReferenceDocuments(this.getObjectDef(resOpt), kind, resOpt.documentRefSet);
+
+                // get the new cache tag now that we have the list of docs
+                cacheTag = ctx.corpus.getDefinitionCacheTag(resOpt, this, kind, '', cacheByName);
                 ctx.cache.set(cacheTag, rtsResult);
+            } else {
+                // cache was found
+                // get the DocSetCollection for this cached object
+                const key: string = CorpusImpl.getCacheKeyFromObject(this, kind);
+                resOpt.documentRefSet = ctx.corpus.definitionReferenceDocuments.get(key);
             }
+
+            // merge child document set with current
+            currDocRefSet.merge(resOpt.documentRefSet);
+            resOpt.documentRefSet = currDocRefSet;
 
             return rtsResult;
         }
@@ -275,5 +308,5 @@ export class TraitReferenceImpl extends cdmObjectRef implements ICdmTraitRef {
 
     public constructResolvedTraits(rtsb: ResolvedTraitSetBuilder, resOpt: resolveOptions): void {
         // traits don't have traits.
-     }
+    }
 }

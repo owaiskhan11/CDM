@@ -18,7 +18,6 @@ import {
 export class ResolvedAttributeSetBuilder {
     public ras: ResolvedAttributeSet;
     public inheritedMark: number;
-    public attributeContext: ICdmAttributeContext;
 
     public actionsModify: traitAction[];
     public actionsGroupAdd: traitAction[];
@@ -26,33 +25,15 @@ export class ResolvedAttributeSetBuilder {
     public actionsAttributeAdd: traitAction[];
     public traitsToApply: ResolvedTraitSet;
 
-    public setAttributeContext(under: ICdmAttributeContext): void {
-        this.attributeContext = under;
-    }
-
-    public createAttributeContext(resOpt: resolveOptions, acp: AttributeContextParameters): ICdmAttributeContext {
-        // let bodyCode = () =>
-        {
-            if (!acp) {
-                return undefined;
-            }
-
-            this.attributeContext = AttributeContextImpl.createChildUnder(resOpt, acp);
-
-            return this.attributeContext;
-        }
-        // return p.measure(bodyCode);
+    constructor() {
+        this.ras = new ResolvedAttributeSet();
     }
 
     public mergeAttributes(rasNew: ResolvedAttributeSet): void {
         // let bodyCode = () =>
         {
             if (rasNew) {
-                if (!this.ras) {
-                    this.takeReference(rasNew);
-                } else {
-                    this.takeReference(this.ras.mergeSet(rasNew));
-                }
+                this.takeReference(this.ras.mergeSet(rasNew));
             }
         }
         // return p.measure(bodyCode);
@@ -88,8 +69,12 @@ export class ResolvedAttributeSetBuilder {
     public ownOne(ra: ResolvedAttribute): void {
         // let bodyCode = () =>
         {
+            // save the current context
+            const attCtx: ICdmAttributeContext = this.ras.attributeContext;
             this.takeReference(new ResolvedAttributeSet());
-            this.ras.merge(ra);
+            this.ras.merge(ra, ra.attCtx);
+            // reapply the old attribute context
+            this.ras.setAttributeContext(attCtx);
         }
         // return p.measure(bodyCode);
     }
@@ -173,12 +158,13 @@ export class ResolvedAttributeSetBuilder {
             }
 
             // get the new atts and then add them one at a time into this set
-            const newAtts: ResolvedAttribute[]  = this.getTraitGeneratedAttributes(true, applyTraitsToNew);
+            const newAtts: ResolvedAttribute[] = this.getTraitGeneratedAttributes(true, applyTraitsToNew);
             if (newAtts) {
                 const l: number = newAtts.length;
                 let ras: ResolvedAttributeSet = this.ras;
                 for (let i: number = 0; i < l; i++) {
-                    ras = ras.merge(newAtts[i]);
+                    // here we want the context that was created in the appliers
+                    ras = ras.merge(newAtts[i], newAtts[i].attCtx);
                 }
                 this.takeReference(ras);
             }
@@ -205,19 +191,19 @@ export class ResolvedAttributeSetBuilder {
 
                 const countSet: (rasSub: ResolvedAttributeSet, offset: number) => number =
                     (rasSub: ResolvedAttributeSet, offset: number): number => {
-                    let last: number = offset;
-                    if (rasSub && rasSub.set) {
-                        for (const resolvedSet of rasSub.set) {
-                            if ((resolvedSet.target as ResolvedAttributeSet).set) {
-                                last = countSet((resolvedSet.target as ResolvedAttributeSet), last);
-                            } else {
-                                last++;
+                        let last: number = offset;
+                        if (rasSub && rasSub.set) {
+                            for (const resolvedSet of rasSub.set) {
+                                if ((resolvedSet.target as ResolvedAttributeSet).set) {
+                                    last = countSet((resolvedSet.target as ResolvedAttributeSet), last);
+                                } else {
+                                    last++;
+                                }
                             }
                         }
-                    }
 
-                    return last;
-                };
+                        return last;
+                    };
                 this.inheritedMark = countSet(this.ras, 0);
             } else {
                 this.inheritedMark = 0;
@@ -270,7 +256,7 @@ export class ResolvedAttributeSetBuilder {
                 return undefined;
             }
 
-            const resAttOut : (ResolvedAttribute)[] = [];
+            const resAttOut: (ResolvedAttribute)[] = [];
 
             // this function constructs a 'plan' for building up the resolved attributes
             // that get generated from a set of traits being applied to a set of attributes.
@@ -278,7 +264,7 @@ export class ResolvedAttributeSetBuilder {
             // 1. once per set of attributes, the traits may want to generate attributes.
             //    this is an attribute that is somehow descriptive of the whole set,
             //    even if it has repeating patterns, like the count for an expanded array.
-            // 2. it is possible that some traits (like the array exander) want to keep generating new attributes for some run.
+            // 2. it is possible that some traits (like the array expander) want to keep generating new attributes for some run.
             //    each time they do this is considered a 'round'the traits are given a chance to generate attributes once per round.
             //    every set gets at least one round, so these should be the attributes that describe the set of other attributes.
             //    for example, the foreign key of a relationship or the 'class' of a polymorphic type, etc.
@@ -298,60 +284,61 @@ export class ResolvedAttributeSetBuilder {
 
             const makeResolvedAttribute: (resAttSource: ResolvedAttribute, action: traitAction,
                                           queryAdd: applierQuery, doAdd: applierAction) => applierContext =
-            (resAttSource: ResolvedAttribute, action: traitAction, queryAdd: applierQuery, doAdd: applierAction): applierContext => {
-                const appCtx: applierContext = {
-                    resOpt: this.traitsToApply.resOpt,
-                    attCtx: this.attributeContext,
-                    resAttSource: resAttSource,
-                    resTrait: action.rt
-                };
+                (resAttSource: ResolvedAttribute, action: traitAction, queryAdd: applierQuery, doAdd: applierAction): applierContext => {
+                    const appCtx: applierContext = {
+                        resOpt: this.traitsToApply.resOpt,
+                        attCtx: this.ras.attributeContext,
+                        resAttSource: resAttSource,
+                        resTrait: action.rt
+                    };
 
-                if (resAttSource && resAttSource.target && (resAttSource.target as ResolvedAttributeSet).set) {
-                    return appCtx;
-                } // makes no sense for a group
+                    if (resAttSource && resAttSource.target && (resAttSource.target as ResolvedAttributeSet).set) {
+                        return appCtx;
+                    } // makes no sense for a group
 
-                // will something add?
-                if (queryAdd(appCtx)) {
-                    // may want to make a new attribute group
-                    if (this.attributeContext && action.applier.willCreateContext && action.applier.willCreateContext(appCtx)) {
-                        action.applier.doCreateContext(appCtx);
-                    }
-                    // make a new resolved attribute as a place to hold results
-                    appCtx.resAttNew = new ResolvedAttribute(appCtx.resOpt, undefined, undefined, appCtx.attCtx ? appCtx.attCtx.ID : -1);
-                    // copy state from source
-                    appCtx.resAttNew.applierState = {};
-                    if (resAttSource && resAttSource.applierState) {
-                        Object.assign(appCtx.resAttNew.applierState, resAttSource.applierState);
-                    }
-                    // if applying traits, then add the sets traits as a staring point
-                    if (applyModifiers) {
-                        appCtx.resAttNew.resolvedTraits = this.traitsToApply.deepCopy();
-                        appCtx.resAttNew.resolvedTraits.collectDirectives(undefined);
-                    }
-                    // make it
-                    doAdd(appCtx);
-
-                    if (applyModifiers) {
-                        // add the sets traits back in to this newly added one
-                        appCtx.resAttNew.resolvedTraits = appCtx.resAttNew.resolvedTraits.mergeSet(this.traitsToApply);
-                        appCtx.resAttNew.resolvedTraits.collectDirectives(undefined);
-                        // do all of the modify traits
-                        if (caps.canAttributeModify) {
-                            // modify acts on the source and we should be done with it
-                            appCtx.resAttSource = appCtx.resAttNew;
+                    // will something add?
+                    if (queryAdd(appCtx)) {
+                        // may want to make a new attribute group
+                        if (this.ras.attributeContext && action.applier.willCreateContext && action.applier.willCreateContext(appCtx)) {
+                            action.applier.doCreateContext(appCtx);
                         }
-                        for (const modAct of this.actionsModify) {
-                            // using a new trait now
-                            appCtx.resTrait = modAct.rt;
-                            if (modAct.applier.willAttributeModify(appCtx)) {
-                                modAct.applier.doAttributeModify(appCtx);
+                        // make a new resolved attribute as a place to hold results
+                        appCtx.resAttNew = new ResolvedAttribute(appCtx.resOpt, undefined, undefined, appCtx.attCtx as AttributeContextImpl);
+                        // copy state from source
+                        appCtx.resAttNew.applierState = {};
+                        if (resAttSource && resAttSource.applierState) {
+                            Object.assign(appCtx.resAttNew.applierState, resAttSource.applierState);
+                        }
+                        // if applying traits, then add the sets traits as a staring point
+                        if (applyModifiers) {
+                            appCtx.resAttNew.resolvedTraits = this.traitsToApply.deepCopy();
+                            appCtx.resAttNew.resolvedTraits.collectDirectives(undefined);
+                        }
+                        // make it
+                        doAdd(appCtx);
+
+                        if (applyModifiers) {
+                            // add the sets traits back in to this newly added one
+                            appCtx.resAttNew.resolvedTraits = appCtx.resAttNew.resolvedTraits.mergeSet(this.traitsToApply);
+                            appCtx.resAttNew.resolvedTraits.collectDirectives(undefined);
+                            // do all of the modify traits
+                            if (caps.canAttributeModify) {
+                                // modify acts on the source and we should be done with it
+                                appCtx.resAttSource = appCtx.resAttNew;
+                            }
+                            for (const modAct of this.actionsModify) {
+                                // using a new trait now
+                                appCtx.resTrait = modAct.rt;
+                                if (modAct.applier.willAttributeModify(appCtx)) {
+                                    modAct.applier.doAttributeModify(appCtx);
+                                }
                             }
                         }
+                        appCtx.resAttNew.completeContext(appCtx.resOpt);
                     }
-                }
 
-                return appCtx;
-            };
+                    return appCtx;
+                };
 
             // get the one time atts
             if (caps.canGroupAdd) {
@@ -368,7 +355,7 @@ export class ResolvedAttributeSetBuilder {
             // now starts a repeating pattern of rounds
             // first step is to get attribute that are descriptions of the round.
             // do this once and then use them as the first entries in the first set of 'previous' atts for the loop
-            let resAttsLastRound : (ResolvedAttribute)[] = [];
+            let resAttsLastRound: (ResolvedAttribute)[] = [];
             if (caps.canRoundAdd) {
                 for (const action of this.actionsRoundAdd) {
                     const appCtx: applierContext =

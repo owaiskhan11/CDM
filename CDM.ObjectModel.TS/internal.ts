@@ -118,3 +118,5 @@ export * from './Utilities/resolveContext';
 export * from './Utilities/docsResult';
 export * from './Cdm/CorpusImpl';
 export * from './Utilities/PrimitiveAppliers';
+export * from './Utilities/docSet';
+export * from './Utilities/docSetCollection';

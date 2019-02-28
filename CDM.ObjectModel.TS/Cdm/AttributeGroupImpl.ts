@@ -206,7 +206,7 @@ export class AttributeGroupImpl extends cdmObjectDef implements ICdmAttributeGro
                     regarding: this,
                     includeTraits: false
                 };
-                under = rasb.createAttributeContext(resOpt, acpAttGrp);
+                under = rasb.ras.createAttributeContext(resOpt, acpAttGrp);
             }
 
             if (this.members) {
@@ -224,7 +224,7 @@ export class AttributeGroupImpl extends cdmObjectDef implements ICdmAttributeGro
                     rasb.mergeAttributes(att.getResolvedAttributes(resOpt, acpAtt));
                 }
             }
-            rasb.setAttributeContext(under);
+            rasb.ras.setAttributeContext(under);
 
             // things that need to go away
             rasb.removeRequestedAtts();

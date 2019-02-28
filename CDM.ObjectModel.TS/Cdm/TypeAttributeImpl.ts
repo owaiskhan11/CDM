@@ -1,4 +1,5 @@
 import {
+    AttributeContextImpl,
     AttributeContextReferenceImpl,
     AttributeImpl,
     AttributeReferenceImpl,
@@ -338,11 +339,11 @@ export class TypeAttributeImpl extends AttributeImpl implements ICdmTypeAttribut
             // the datatype used as an attribute, traits applied to that datatype,
             // the relationship of the attribute, any traits applied to the attribute.
             const rasb: ResolvedAttributeSetBuilder = new ResolvedAttributeSetBuilder();
-            rasb.setAttributeContext(under);
+            rasb.ras.setAttributeContext(under);
 
             // add this attribute to the set
             // make a new one and apply any traits
-            const newAtt: ResolvedAttribute = new ResolvedAttribute(resOpt, this, this.name, under ? under.ID : -1);
+            const newAtt: ResolvedAttribute = new ResolvedAttribute(resOpt, this, this.name, under as AttributeContextImpl);
             rasb.ownOne(newAtt);
             rasb.prepareForTraitApplication(this.getResolvedTraits(resOpt));
 

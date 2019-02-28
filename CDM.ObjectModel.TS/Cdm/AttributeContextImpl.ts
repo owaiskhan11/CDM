@@ -15,6 +15,8 @@ import {
     ICdmObject,
     ICdmObjectRef,
     ICdmTraitRef,
+    ResolvedAttribute,
+    ResolvedAttributeSet,
     ResolvedAttributeSetBuilder,
     ResolvedTrait,
     ResolvedTraitSet,
@@ -31,7 +33,6 @@ export class AttributeContextImpl extends cdmObjectDef implements ICdmAttributeC
     public contents?: (ICdmObjectRef | ICdmAttributeContext)[];
     public name: string;
     public lowestOrder: number;
-    public id2ctx: Map<number, AttributeContextImpl>;
 
     constructor(ctx: CdmCorpusContext, name: string) {
         super(ctx, false);
@@ -39,6 +40,8 @@ export class AttributeContextImpl extends cdmObjectDef implements ICdmAttributeC
         {
             this.objectType = cdmObjectType.attributeContextDef;
             this.name = name;
+            // this will get overwritten when parent set
+            this.corpusPath = name;
         }
         // return p.measure(bodyCode);
     }
@@ -145,7 +148,7 @@ export class AttributeContextImpl extends cdmObjectDef implements ICdmAttributeC
                 return acp.under as AttributeContextImpl;
             }
 
-            // this flag makes sure we hold on to any resolved object refs when things get coppied
+            // this flag makes sure we hold on to any resolved object refs when things get copied
             const resOptCopy: resolveOptions = cdmObject.copyResolveOptions(resOpt);
             resOptCopy.saveResolutionsOnCopy = true;
 
@@ -190,6 +193,7 @@ export class AttributeContextImpl extends cdmObjectDef implements ICdmAttributeC
         }
         // return p.measure(bodyCode);
     }
+
     public copyData(resOpt: resolveOptions, options: copyOptions): AttributeContext {
         // let bodyCode = () =>
         {
@@ -206,46 +210,18 @@ export class AttributeContextImpl extends cdmObjectDef implements ICdmAttributeC
         }
         // return p.measure(bodyCode);
     }
-    public copy(resOpt: resolveOptions): ICdmObject {
+
+    public copyNode(resOpt: resolveOptions): ICdmObject {
         // let bodyCode = () =>
         {
+            // instead of copying the entire context tree, just the current node
             const copy: AttributeContextImpl = new AttributeContextImpl(this.ctx, this.name);
-            // because resolved attributes indirect to the context they are created in by way of id, use the same ID for a copy.
-            copy.ID = this.ID;
             copy.type = this.type;
             copy.docCreatedIn = resOpt.wrtDoc as DocumentImpl;
-            if (this.parent) {
-                copy.parent = this.parent.copy(resOpt) as ICdmObjectRef;
-            }
             if (this.definition) {
                 copy.definition = this.definition.copy(resOpt) as ICdmObjectRef;
             }
-            copy.contents = cdmObject.arrayCopy<ICdmObjectRef | ICdmAttributeContext>(
-                resOpt,
-                this.contents as ICdmObject[] as cdmObject[]);
-            // need to fix the parent refs
-            if (copy.contents) {
-                for (const cnt of copy.contents) {
-                    if (cnt.getObjectType() === cdmObjectType.attributeContextDef) {
-                        const parentRef: cdmObjectRef = (cnt as AttributeContextImpl).parent as cdmObjectRef;
-                        parentRef.explicitReference = copy;
-                    }
-                }
-            }
-
-            // if there is a map from ID to object, make a new one
-            if (this.id2ctx) {
-                copy.collectIdMap(undefined);
-                // as a special issue, there may be other IDs in the map that point at this context
-                // (this is actually the whole point of using the map,
-                // so that we can redirect attributes to a new place on context copy / splice)
-                // so, any entries in the source map that point at this context should get moved over to the copy
-                this.id2ctx.forEach((v: AttributeContextImpl, k: number) => {
-                    if (v === this) {
-                        copy.id2ctx.set(k, copy);
-                    }
-                });
-            }
+            copy.contents = [];
 
             this.copyDef(resOpt, copy);
 
@@ -254,35 +230,44 @@ export class AttributeContextImpl extends cdmObjectDef implements ICdmAttributeC
         // return p.measure(bodyCode);
     }
 
-    public collectIdMap(id2ctx: Map<number, AttributeContextImpl>): void {
-        // let bodyCode = () =>
-        {
-            if (!id2ctx) {
-                // this must be the starting point, collect all mappings under this context and store here
-                if (!this.id2ctx) {
-                    this.id2ctx = new Map<number, AttributeContextImpl>();
+    public copyAttributeContextTree(resOpt: resolveOptions, newNode: AttributeContextImpl,
+                                    ras: ResolvedAttributeSet, attCtxSet?: Set<AttributeContextImpl>): AttributeContextImpl {
+        const ra: ResolvedAttribute = ras.attCtx2ra.get(this);
+        if (ra) {
+            ras.cacheAttributeContext(newNode, ra);
+        }
+
+        // add context to set
+        if (attCtxSet) {
+            attCtxSet.add(newNode);
+        }
+
+        // now copy the children
+        if (this.contents && this.contents.length > 0) {
+            for (const child of this.contents) {
+                const newChild: AttributeContextImpl = (child as AttributeContextImpl).copyNode(resOpt) as AttributeContextImpl;
+                if (newNode) {
+                    newChild.setParent(resOpt, newNode);
                 }
-                id2ctx = this.id2ctx;
-            }
-            if (this.id2ctx && this.id2ctx.size > 0) {
-                // a map has been collected here before (any may even have extra, important mappings added), so just copy it.
-                if (id2ctx !== this.id2ctx) {
-                    this.id2ctx.forEach((v: AttributeContextImpl, k: number) => { id2ctx.set(k, v); });
-                }
-            } else {
-                // fresh map, us and children
-                id2ctx.set(this.ID, this);
-                if (this.contents) {
-                    for (const cnt of this.contents) {
-                        if (cnt.getObjectType() === cdmObjectType.attributeContextDef) {
-                            (cnt as AttributeContextImpl).collectIdMap(id2ctx);
-                        }
-                    }
-                }
+                (child as AttributeContextImpl).copyAttributeContextTree(resOpt, newChild, ras, attCtxSet);
             }
         }
-        // return p.measure(bodyCode);
 
+        return newNode;
+    }
+
+    public copy(resOpt: resolveOptions): ICdmObject {
+        const copy: AttributeContextImpl = this.copyNode(resOpt) as AttributeContextImpl;
+        if (this.parent) {
+            copy.parent = this.parent.copy(resOpt) as ICdmObjectRef;
+        }
+        if (this.contents && this.contents.length > 0) {
+            for (const child of this.contents) {
+                copy.contents.push(child.copy(resOpt) as (ICdmAttributeContext | ICdmObjectRef));
+            }
+        }
+
+        return copy;
     }
 
     public validate(): boolean {
@@ -362,18 +347,6 @@ export class AttributeContextImpl extends cdmObjectDef implements ICdmAttributeC
         // return p.measure(bodyCode);
     }
 
-    public getRelativePath(resOpt: resolveOptions): string {
-        let pre: string = '';
-        if (this.parent) {
-            const resParent: ICdmAttributeContext = this.parent.getObjectDef(resOpt) as ICdmAttributeContext;
-            if (resParent) {
-                pre = `${resParent.getRelativePath(resOpt)}/`;
-            }
-
-        }
-
-        return pre + this.name;
-    }
     public isDerivedFrom(resOpt: resolveOptions, base: string): boolean {
         // let bodyCode = () =>
         {
@@ -399,8 +372,11 @@ export class AttributeContextImpl extends cdmObjectDef implements ICdmAttributeC
             // will need a working reference to this as the parent
             const parentRef: cdmObjectRef = this.ctx.corpus.MakeObject(
                 cdmObjectType.attributeContextRef,
-                parent.getRelativePath(resOpt),
+                parent.corpusPath,
                 true);
+            if (this.name) {
+                this.corpusPath = `${parent.corpusPath}/${this.name}`;
+            }
             parentRef.explicitReference = parent;
             // setting this will let the 'localize references' code trace from any document back to where the parent is defined
             parentRef.docCreatedIn = parent.docCreatedIn;

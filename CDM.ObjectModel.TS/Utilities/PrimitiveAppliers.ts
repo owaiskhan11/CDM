@@ -446,6 +446,16 @@ const PrimitiveAppliers: TraitApplier[] = [
             // get the resolved traits from attribute
             appCtx.resAttNew.resolvedTraits = sub.getResolvedTraits(appCtx.resOpt);
         },
+        willCreateContext: (appCtx: applierContext): boolean => {
+            return true;
+        },
+        doCreateContext: (appCtx: applierContext): void => {
+            const acp: AttributeContextParameters = {
+                under: appCtx.attCtx,
+                type: cdmAttributeContextType.attributeDefinition
+            };
+            appCtx.attCtx = AttributeContextImpl.createChildUnder(appCtx.resOpt, acp);
+        },
         willAttributeAdd: (appCtx: applierContext): boolean => {
             const dir: TraitDirectiveSet = appCtx.resOpt.directives;
             const isNorm: boolean = dir && dir.has('normalized');

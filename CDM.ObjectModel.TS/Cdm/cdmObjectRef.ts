@@ -10,6 +10,7 @@ import {
     cdmStatusLevel,
     copyOptions,
     CorpusImpl,
+    DocSetCollection,
     friendlyFormatNode,
     ICdmAttributeContext,
     ICdmDocumentDef,
@@ -326,7 +327,7 @@ export abstract class cdmObjectRef extends cdmObject implements ICdmObjectRef {
         {
             // find and cache the complete set of attributes
             const rasb: ResolvedAttributeSetBuilder = new ResolvedAttributeSetBuilder();
-            rasb.setAttributeContext(under);
+            rasb.ras.setAttributeContext(under);
             const def: ICdmObjectDef = this.getObjectDef(resOpt);
             if (def) {
                 let acpRef: AttributeContextParameters;
@@ -338,7 +339,7 @@ export abstract class cdmObjectRef extends cdmObject implements ICdmObjectRef {
                     };
                 }
                 let resAtts: ResolvedAttributeSet = def.getResolvedAttributes(resOpt, acpRef);
-                if (resAtts) {
+                if (resAtts && resAtts.set.length > 0) {
                     resAtts = resAtts.copy();
                     rasb.mergeAttributes(resAtts);
                     rasb.removeRequestedAtts();
@@ -353,10 +354,17 @@ export abstract class cdmObjectRef extends cdmObject implements ICdmObjectRef {
     public getResolvedTraits(resOpt: resolveOptions): ResolvedTraitSet {
         // let bodyCode = () =>
         {
+            const kind: string = 'rts';
             if (this.namedReference && !this.appliedTraits) {
                 const ctx: resolveContext = this.ctx as resolveContext;
-                const cacheTag: string = ctx.corpus.getDefinitionCacheTag(resOpt, this, 'rts', '', true);
-                let rtsResult: ResolvedTraitSet = ctx.cache.get(cacheTag);
+                let cacheTag: string = ctx.corpus.getDefinitionCacheTag(resOpt, this, kind, '', true);
+                let rtsResult: ResolvedTraitSet = cacheTag ? ctx.cache.get(cacheTag) : null;
+
+                // store the previous document set, we will need to add it with
+                // children found from the constructResolvedTraits call
+                const currDocRefSet: DocSetCollection = resOpt.documentRefSet || new DocSetCollection();
+                resOpt.documentRefSet = new DocSetCollection();
+
                 if (!rtsResult) {
                     const objDef: ICdmObjectDef = this.getObjectDef(resOpt);
                     rtsResult = objDef.getResolvedTraits(resOpt);
@@ -364,8 +372,22 @@ export abstract class cdmObjectRef extends cdmObject implements ICdmObjectRef {
                         rtsResult = rtsResult.deepCopy();
                     }
 
+                    // register set of possible docs
+                    ctx.corpus.registerDefinitionReferenceDocuments(this.getObjectDef(resOpt), kind, resOpt.documentRefSet);
+
+                    // get the new cache tag now that we have the list of docs
+                    cacheTag = ctx.corpus.getDefinitionCacheTag(resOpt, this, kind, '', true);
                     ctx.cache.set(cacheTag, rtsResult);
+                } else {
+                    // cache was found
+                    // get the DocSetCollection for this cached object
+                    const key: string = CorpusImpl.getCacheKeyFromObject(this, kind);
+                    resOpt.documentRefSet = ctx.corpus.definitionReferenceDocuments.get(key);
                 }
+
+                // merge child document set with current
+                currDocRefSet.merge(resOpt.documentRefSet);
+                resOpt.documentRefSet = currDocRefSet;
 
                 return rtsResult;
             } else {
