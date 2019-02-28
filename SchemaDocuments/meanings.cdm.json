@@ -12,10 +12,6 @@
             "extendsTrait": "means"
         },
         {
-            "traitName": "means.calendar.fiscal",
-            "extendsTrait": "means.calendar"
-        },
-        {
             "traitName": "means.calendar.ISO8601",
             "extendsTrait": "means.calendar"
         },
