@@ -4,6 +4,7 @@
     "imports": [
         {
             "uri": "/primitives.cdm.json"
+            "stuff": "more stuff"
         }
     ],
     "definitions": [
